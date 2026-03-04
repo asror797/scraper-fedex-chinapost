@@ -1,0 +1,21 @@
+{
+  "name": "fedex-scraper",
+  "version": "1.0.0",
+  "description": "FedEx tracking lookup service",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "axios": "^1.13.6",
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1",
+    "hyper-sdk-js": "^2.12.0",
+    "impit": "^0.10.1"
+  }
+}
