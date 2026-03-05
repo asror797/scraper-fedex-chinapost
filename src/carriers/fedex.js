@@ -10,7 +10,6 @@ const {
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 const ACCEPT_LANGUAGE = 'en-US,en;q=0.9';
 
-// --- Singletons (lazy init) ---
 let impit = null;
 let hyperSession = null;
 
@@ -30,7 +29,6 @@ function getHyperSession() {
   return hyperSession;
 }
 
-// --- Caches ---
 const cache = new Map();
 const CACHE_TTL = 5 * 60 * 1000;
 
@@ -48,7 +46,6 @@ function getCached(trackingNumber) {
   return null;
 }
 
-// Akamai state
 let cookies = {};
 let sensorContext = '';
 let cachedToken = null;
@@ -201,8 +198,6 @@ async function solveFedExAkamai(client, trackNum) {
   return false;
 }
 
-// --- Response conversion ---
-
 function mapFedexApiStatus(keyStatus) {
   if (!keyStatus) return 'notfound';
   const s = keyStatus.toLowerCase();
@@ -251,8 +246,6 @@ function buildNotFoundResponse(trackingNumber) {
     _data_storage: [],
   };
 }
-
-// --- Hyper Solutions + impit (Primary) ---
 
 async function trackViaHyper(trackingNumber) {
   const client = await getImpit();
@@ -316,8 +309,6 @@ async function trackViaHyper(trackingNumber) {
 
   return convertFedexApiToClient(trackingNumber, pkg);
 }
-
-// --- Ship24 API (Fallback) ---
 
 function mapShip24Status(milestone, statusCode) {
   if (!milestone && !statusCode) return 'notfound';
@@ -399,13 +390,10 @@ async function trackViaShip24(trackingNumber) {
   return convertShip24ToClient(trackingNumber, tracking);
 }
 
-// --- Main Entry ---
-
 async function trackFedEx(trackingNumber) {
   const cached = getCached(trackingNumber);
   if (cached) return cached;
 
-  // 1. Hyper Solutions + impit (primary, ~1-9s)
   if (process.env.HYPER_API_KEY) {
     try {
       const result = await trackViaHyper(trackingNumber);
@@ -419,7 +407,6 @@ async function trackFedEx(trackingNumber) {
     }
   }
 
-  // 2. Ship24 API (fallback, ~2-4s)
   try {
     console.log(`[FedEx] Trying Ship24 for ${trackingNumber}...`);
     const ship24Result = await trackViaShip24(trackingNumber);

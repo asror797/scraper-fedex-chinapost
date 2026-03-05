@@ -1,6 +1,5 @@
 const axios = require('axios');
 
-// In-memory cache (5 min TTL)
 const cache = new Map();
 const CACHE_TTL = 5 * 60 * 1000;
 
@@ -30,7 +29,6 @@ function buildNotFoundResponse(trackingNumber) {
   };
 }
 
-// Map Cainiao status to required status values
 function mapStatus(cniStatus) {
   if (!cniStatus) return 'notfound';
   const s = cniStatus.toUpperCase();
@@ -51,21 +49,10 @@ function mapStatus(cniStatus) {
   return 'transit';
 }
 
-// Parse location from Cainiao event description
-function parseEventLocation(desc) {
-  if (!desc) return null;
-  // Common patterns: "Arrived at [Location]", "Departed from [Location]", "[Location], ..."
-  // Cainiao events sometimes have location embedded in description
-  return null; // Cainiao doesn't provide separate location field
-}
-
-// Parse Cainiao datetime to required format
 function formatDate(dateStr) {
   if (!dateStr) return null;
-  // Cainiao format: "2026-02-28 14:30:00" or ISO format
   const d = new Date(dateStr);
   if (isNaN(d.getTime())) return null;
-
   const pad = (n) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
@@ -91,11 +78,10 @@ async function fetchFromCainiao(trackingNumber) {
   const m = res.data.module[0];
   const events = (m.detailList || []).map((e) => ({
     date: formatDate(e.time || e.timeStr),
-    information: e.desc || e.statusDesc || '',
-    actual_position_parcel: e.city || e.location || parseEventLocation(e.desc) || null,
+    information: e.standerdDesc || e.desc || e.statusDesc || '',
+    actual_position_parcel: e.city || e.location || null,
   }));
 
-  // Cainiao returns newest first already
   const status = mapStatus(m.status);
 
   return {
