@@ -105,6 +105,7 @@ function buildNotFoundResponse(trackingNumber) {
 async function trackFedExBrowserless(trackingNumber) {
   if (!BROWSERLESS_KEY) throw new Error('BROWSERLESS_API_KEY is required');
 
+  const start = Date.now();
   const res = await axios.post(
     `${BASE}/function?token=${BROWSERLESS_KEY}`,
     buildCode(trackingNumber),
@@ -117,15 +118,28 @@ async function trackFedExBrowserless(trackingNumber) {
   const raw = typeof res.data?.data === 'string' ? res.data.data : JSON.stringify(res.data);
   const json = JSON.parse(raw);
 
-  if (json.error) return buildNotFoundResponse(trackingNumber);
+  const elapsed = Date.now() - start;
+
+  if (json.error) {
+    console.log(`[FedEx/Browserless] ${trackingNumber} → ${json.error} (${elapsed}ms)`);
+    return buildNotFoundResponse(trackingNumber);
+  }
 
   const pkg = json?.output?.packages?.[0];
-  if (!pkg) return buildNotFoundResponse(trackingNumber);
+  if (!pkg) {
+    console.log(`[FedEx/Browserless] ${trackingNumber} → no package data (${elapsed}ms)`);
+    return buildNotFoundResponse(trackingNumber);
+  }
 
-  if (pkg.errorList && pkg.errorList.length > 0) return buildNotFoundResponse(trackingNumber);
+  if (pkg.errorList && pkg.errorList.length > 0) {
+    console.log(`[FedEx/Browserless] ${trackingNumber} → ${pkg.errorList[0]?.message || 'error'} (${elapsed}ms)`);
+    return buildNotFoundResponse(trackingNumber);
+  }
 
   const shipper = pkg.shipperAddress || {};
   const recipient = pkg.recipientAddress || {};
+
+  console.log(`[FedEx/Browserless] ${trackingNumber} → ${pkg.keyStatus} (${elapsed}ms, ${(pkg.scanEventList || []).length} events)`);
 
   return {
     trackid: trackingNumber,
