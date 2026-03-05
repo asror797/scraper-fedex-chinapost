@@ -216,6 +216,15 @@ function mapFedexApiStatus(keyStatus) {
 }
 
 function convertFedexApiToClient(trackingNumber, pkg) {
+  if (!pkg.keyStatus && (!pkg.scanEventList || pkg.scanEventList.length === 0)) {
+    return buildNotFoundResponse(trackingNumber);
+  }
+
+  const hasRealEvents = (pkg.scanEventList || []).some(e => e.date && (e.description || e.eventDescription || e.scanType));
+  if (!pkg.keyStatus && !hasRealEvents) {
+    return buildNotFoundResponse(trackingNumber);
+  }
+
   const shipper = pkg.shipperAddress || {};
   const recipient = pkg.recipientAddress || {};
 
@@ -316,6 +325,11 @@ async function trackViaHyper(trackingNumber) {
   const json = JSON.parse(body);
   const pkg = json?.output?.packages?.[0];
   if (!pkg) return null;
+
+  if (pkg.errorList && pkg.errorList.length > 0) {
+    console.log(`[FedEx/Hyper] Error for ${trackingNumber}: ${pkg.errorList[0]?.message || JSON.stringify(pkg.errorList[0])}`);
+    return null;
+  }
 
   return convertFedexApiToClient(trackingNumber, pkg);
 }
