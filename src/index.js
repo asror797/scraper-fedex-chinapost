@@ -2,6 +2,7 @@ require('dotenv').config();
 
 const express = require('express');
 const { trackFedEx } = require('./carriers/fedex');
+const { trackFedExBrowserless } = require('./carriers/fedex-browserless');
 const { trackChinaPost } = require('./carriers/chinapost');
 
 const app = express();
@@ -22,7 +23,14 @@ app.get('/track', async (req, res) => {
   }
 
   const carrierName = (carrier || 'fedex').toLowerCase();
-  const trackFn = SUPPORTED_CARRIERS[carrierName];
+  const method = (req.query.method || '').toLowerCase();
+
+  let trackFn;
+  if (carrierName === 'fedex' && method === 'browserless') {
+    trackFn = trackFedExBrowserless;
+  } else {
+    trackFn = SUPPORTED_CARRIERS[carrierName];
+  }
 
   if (!trackFn) {
     return res.status(400).json({
