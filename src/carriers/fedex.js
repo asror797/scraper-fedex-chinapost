@@ -1,11 +1,12 @@
 const axios = require('axios');
-const {
-  Session,
-  SensorInput,
-  generateSensorData,
-  parseAkamaiPath,
-  isAkamaiCookieValid,
-} = require('hyper-sdk-js');
+
+let hyperSdk = null;
+
+async function getHyperSdk() {
+  if (hyperSdk) return hyperSdk;
+  hyperSdk = await import('hyper-sdk-js');
+  return hyperSdk;
+}
 
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 const ACCEPT_LANGUAGE = 'en-US,en;q=0.9';
@@ -20,8 +21,9 @@ async function getImpit() {
   return impit;
 }
 
-function getHyperSession() {
+async function getHyperSession() {
   if (hyperSession) return hyperSession;
+  const { Session } = await getHyperSdk();
   const apiKey = process.env.HYPER_API_KEY;
   const jwtKey = process.env.HYPER_JWT_KEY;
   if (!apiKey) throw new Error('HYPER_API_KEY is required');
@@ -137,6 +139,8 @@ async function solveFedExAkamai(client, trackNum) {
     throw new Error('WAF blocked page request');
   }
 
+  const { parseAkamaiPath, SensorInput, generateSensorData, isAkamaiCookieValid: checkCookie } = await getHyperSdk();
+
   let scriptUrl = cachedScriptUrl;
   let scriptBody = cachedScriptBody;
 
@@ -163,7 +167,7 @@ async function solveFedExAkamai(client, trackNum) {
     cachedScriptExpiry = Date.now() + 3600_000;
   }
 
-  const session = getHyperSession();
+  const session = await getHyperSession();
   sensorContext = '';
 
   for (let i = 1; i <= 3; i++) {
@@ -191,7 +195,7 @@ async function solveFedExAkamai(client, trackNum) {
     });
     parseCookiesFromHeaders(postRes.headers);
 
-    if (cookies._abck && isAkamaiCookieValid(cookies._abck, i)) {
+    if (cookies._abck && checkCookie(cookies._abck, i)) {
       return true;
     }
   }
@@ -251,6 +255,7 @@ async function trackViaHyper(trackingNumber) {
   const client = await getImpit();
   const start = Date.now();
 
+  const { isAkamaiCookieValid } = await getHyperSdk();
   const needSensor = !cookies._abck || !isAkamaiCookieValid(cookies._abck, 3);
 
   if (needSensor) {
