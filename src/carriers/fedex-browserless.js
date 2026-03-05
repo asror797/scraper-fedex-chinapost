@@ -106,54 +106,60 @@ async function trackFedExBrowserless(trackingNumber) {
   if (!BROWSERLESS_KEY) throw new Error('BROWSERLESS_API_KEY is required');
 
   const start = Date.now();
-  const res = await axios.post(
-    `${BASE}/function?token=${BROWSERLESS_KEY}`,
-    buildCode(trackingNumber),
-    {
-      headers: { 'Content-Type': 'application/javascript' },
-      timeout: 90000,
+
+  try {
+    const res = await axios.post(
+      `${BASE}/function?token=${BROWSERLESS_KEY}`,
+      buildCode(trackingNumber),
+      {
+        headers: { 'Content-Type': 'application/javascript' },
+        timeout: 90000,
+      }
+    );
+
+    const raw = typeof res.data?.data === 'string' ? res.data.data : JSON.stringify(res.data);
+    const json = JSON.parse(raw);
+    const elapsed = Date.now() - start;
+
+    if (json.error) {
+      console.log(`[FedEx/Browserless] ${trackingNumber} → ${json.error} (${elapsed}ms)`);
+      return buildNotFoundResponse(trackingNumber);
     }
-  );
 
-  const raw = typeof res.data?.data === 'string' ? res.data.data : JSON.stringify(res.data);
-  const json = JSON.parse(raw);
+    const pkg = json?.output?.packages?.[0];
+    if (!pkg) {
+      console.log(`[FedEx/Browserless] ${trackingNumber} → no package data (${elapsed}ms)`);
+      return buildNotFoundResponse(trackingNumber);
+    }
 
-  const elapsed = Date.now() - start;
+    if (pkg.errorList && pkg.errorList.length > 0) {
+      console.log(`[FedEx/Browserless] ${trackingNumber} → ${pkg.errorList[0]?.message || 'error'} (${elapsed}ms)`);
+      return buildNotFoundResponse(trackingNumber);
+    }
 
-  if (json.error) {
-    console.log(`[FedEx/Browserless] ${trackingNumber} → ${json.error} (${elapsed}ms)`);
+    const shipper = pkg.shipperAddress || {};
+    const recipient = pkg.recipientAddress || {};
+
+    console.log(`[FedEx/Browserless] ${trackingNumber} → ${pkg.keyStatus} (${elapsed}ms, ${(pkg.scanEventList || []).length} events)`);
+
+    return {
+      trackid: trackingNumber,
+      status: mapStatus(pkg.keyStatus),
+      original_country: shipper.countryCD || shipper.countryName || null,
+      original_city_state: [shipper.city, shipper.stateCD].filter(Boolean).join(', ') || null,
+      destination_country: recipient.countryCD || recipient.countryName || null,
+      destination_city_state: [recipient.city, recipient.stateCD].filter(Boolean).join(', ') || null,
+      _data_storage: (pkg.scanEventList || []).map(e => ({
+        date: e.date || null,
+        information: e.description || e.eventDescription || e.scanType || '',
+        actual_position_parcel: e.scanLocation || null,
+      })),
+    };
+  } catch (err) {
+    const elapsed = Date.now() - start;
+    console.log(`[FedEx/Browserless] ${trackingNumber} → FAILED: ${err.message} (${elapsed}ms)`);
     return buildNotFoundResponse(trackingNumber);
   }
-
-  const pkg = json?.output?.packages?.[0];
-  if (!pkg) {
-    console.log(`[FedEx/Browserless] ${trackingNumber} → no package data (${elapsed}ms)`);
-    return buildNotFoundResponse(trackingNumber);
-  }
-
-  if (pkg.errorList && pkg.errorList.length > 0) {
-    console.log(`[FedEx/Browserless] ${trackingNumber} → ${pkg.errorList[0]?.message || 'error'} (${elapsed}ms)`);
-    return buildNotFoundResponse(trackingNumber);
-  }
-
-  const shipper = pkg.shipperAddress || {};
-  const recipient = pkg.recipientAddress || {};
-
-  console.log(`[FedEx/Browserless] ${trackingNumber} → ${pkg.keyStatus} (${elapsed}ms, ${(pkg.scanEventList || []).length} events)`);
-
-  return {
-    trackid: trackingNumber,
-    status: mapStatus(pkg.keyStatus),
-    original_country: shipper.countryCD || shipper.countryName || null,
-    original_city_state: [shipper.city, shipper.stateCD].filter(Boolean).join(', ') || null,
-    destination_country: recipient.countryCD || recipient.countryName || null,
-    destination_city_state: [recipient.city, recipient.stateCD].filter(Boolean).join(', ') || null,
-    _data_storage: (pkg.scanEventList || []).map(e => ({
-      date: e.date || null,
-      information: e.description || e.eventDescription || e.scanType || '',
-      actual_position_parcel: e.scanLocation || null,
-    })),
-  };
 }
 
 module.exports = { trackFedExBrowserless };
