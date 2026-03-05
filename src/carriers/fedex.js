@@ -301,6 +301,11 @@ async function trackViaHyper(trackingNumber) {
     console.log(`[FedEx/Hyper] Cookie expired, re-solving...`);
     cookies = {};
     sensorContext = '';
+    cachedToken = null;
+    cachedTokenExpiry = 0;
+    cachedScriptUrl = null;
+    cachedScriptBody = null;
+    cachedScriptExpiry = 0;
     return trackViaHyper(trackingNumber);
   }
 
@@ -315,113 +320,19 @@ async function trackViaHyper(trackingNumber) {
   return convertFedexApiToClient(trackingNumber, pkg);
 }
 
-function mapShip24Status(milestone, statusCode) {
-  if (!milestone && !statusCode) return 'notfound';
-  const m = (milestone || '').toLowerCase();
-  if (m === 'delivered') return 'delivered';
-  if (m === 'in_transit' || m === 'out_for_delivery') return 'transit';
-  if (m === 'info_received') return 'pretransit';
-  if (m === 'failed_attempt' || m === 'exception') return 'exception';
-  if (m === 'available_for_pickup') return 'pickup';
-  if (m === 'expired') return 'expired';
-  const sc = (statusCode || '').toLowerCase();
-  if (sc.includes('deliver')) return 'delivered';
-  if (sc.includes('transit') || sc.includes('shipping')) return 'transit';
-  if (sc.includes('exception') || sc.includes('fail')) return 'exception';
-  if (sc.includes('pickup')) return 'pickup';
-  if (sc.includes('created') || sc.includes('info') || sc.includes('order')) return 'pretransit';
-  return 'transit';
-}
-
-function parseShip24Location(loc) {
-  if (!loc) return { country: null, cityState: null };
-  const parts = loc.split(' ');
-  const last = parts[parts.length - 1];
-  if (last.length === 2 && last === last.toUpperCase() && parts.length >= 2) {
-    return { country: last, cityState: parts.slice(0, -1).join(' ').replace(/,$/, '') };
-  }
-  return { country: null, cityState: loc };
-}
-
-function formatShip24Date(dt) {
-  if (!dt) return null;
-  const match = dt.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})/);
-  return match ? match[1] : null;
-}
-
-function convertShip24ToClient(trackingNumber, ship24Data) {
-  const ship = ship24Data.shipment;
-  const events = ship24Data.events || [];
-  if (events.length === 0) return buildNotFoundResponse(trackingNumber);
-
-  let originCityState = null;
-  for (let i = events.length - 1; i >= 0; i--) {
-    if (events[i].location) { originCityState = parseShip24Location(events[i].location).cityState; break; }
-  }
-  let destCityState = null;
-  for (let i = 0; i < events.length; i++) {
-    if (events[i].location) { destCityState = parseShip24Location(events[i].location).cityState; break; }
-  }
-
-  return {
-    trackid: trackingNumber,
-    status: mapShip24Status(ship.statusMilestone, ship.statusCode),
-    original_country: ship.originCountryCode || null,
-    original_city_state: originCityState,
-    destination_country: ship.destinationCountryCode || null,
-    destination_city_state: destCityState,
-    _data_storage: events.map(e => ({
-      date: formatShip24Date(e.occurrenceDatetime || e.datetime),
-      information: e.status || '',
-      actual_position_parcel: e.location || null,
-    })),
-  };
-}
-
-async function trackViaShip24(trackingNumber) {
-  const SHIP24_KEY = process.env.SHIP24_API_KEY;
-  if (!SHIP24_KEY) return null;
-
-  const res = await axios.post('https://api.ship24.com/public/v1/tracking/search', {
-    trackingNumber,
-    courierCode: ['fedex'],
-  }, {
-    headers: { 'Authorization': `Bearer ${SHIP24_KEY}`, 'Content-Type': 'application/json' },
-    timeout: 30000,
-  });
-
-  const tracking = res.data?.data?.trackings?.[0];
-  if (!tracking || !tracking.events || tracking.events.length === 0) return null;
-  return convertShip24ToClient(trackingNumber, tracking);
-}
-
 async function trackFedEx(trackingNumber) {
   const cached = getCached(trackingNumber);
   if (cached) return cached;
 
-  if (process.env.HYPER_API_KEY) {
-    try {
-      const result = await trackViaHyper(trackingNumber);
-      if (result && result.status !== 'notfound') {
-        console.log(`[FedEx/Hyper] Success: ${result.status} (${result._data_storage.length} events)`);
-        cache.set(trackingNumber, { data: result, ts: Date.now() });
-        return result;
-      }
-    } catch (err) {
-      console.log(`[FedEx/Hyper] Failed: ${err.message}`);
-    }
-  }
-
   try {
-    console.log(`[FedEx] Trying Ship24 for ${trackingNumber}...`);
-    const ship24Result = await trackViaShip24(trackingNumber);
-    if (ship24Result && ship24Result.status !== 'notfound') {
-      console.log(`[FedEx/Ship24] Success: ${ship24Result.status}`);
-      cache.set(trackingNumber, { data: ship24Result, ts: Date.now() });
-      return ship24Result;
+    const result = await trackViaHyper(trackingNumber);
+    if (result && result.status !== 'notfound') {
+      console.log(`[FedEx] Success: ${result.status} (${result._data_storage.length} events)`);
+      cache.set(trackingNumber, { data: result, ts: Date.now() });
+      return result;
     }
   } catch (err) {
-    console.log(`[FedEx/Ship24] Failed: ${err.message}`);
+    console.log(`[FedEx] Failed: ${err.message}`);
   }
 
   return buildNotFoundResponse(trackingNumber);
