@@ -4,6 +4,7 @@ const express = require('express');
 const { trackFedEx } = require('./carriers/fedex');
 const { trackFedExBrowserless } = require('./carriers/fedex-browserless');
 const { trackChinaPost } = require('./carriers/chinapost');
+const { track17track } = require('./carriers/17track');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -13,6 +14,7 @@ app.use(express.json());
 const SUPPORTED_CARRIERS = {
   fedex: trackFedEx,
   chinapost: trackChinaPost,
+  '17track': track17track,
 };
 
 app.get('/track', async (req, res) => {

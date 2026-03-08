@@ -9,6 +9,8 @@ async function getHyperSdk() {
 }
 
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+const SEC_CH_UA = '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"';
+const SEC_CH_UA_PLATFORM = '"Windows"';
 const ACCEPT_LANGUAGE = 'en-US,en;q=0.9';
 
 let impit = null;
@@ -290,9 +292,9 @@ async function trackViaHyper(trackingNumber) {
       'X-clientid': 'WTRK',
       'X-locale': 'en_US',
       'X-version': '1.0.0',
-      'sec-ch-ua': '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+      'sec-ch-ua': SEC_CH_UA,
       'sec-ch-ua-mobile': '?0',
-      'sec-ch-ua-platform': '"Windows"',
+      'sec-ch-ua-platform': SEC_CH_UA_PLATFORM,
       'Sec-Fetch-Dest': 'empty',
       'Sec-Fetch-Mode': 'cors',
       'Sec-Fetch-Site': 'same-site',

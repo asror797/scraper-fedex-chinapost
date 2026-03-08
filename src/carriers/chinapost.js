@@ -1,7 +1,11 @@
 const crypto = require('crypto');
+const axios = require('axios');
+const { HttpsProxyAgent } = require('https-proxy-agent');
 
 const HMAC_SECRET = 'qxV6SOr2tqw9m36j0-R-ohPt1PAB2et0';
 const SALT = '\u1780';
+const PROXY_URL = process.env.BRIGHTDATA_PROXY || null;
+const proxyAgent = PROXY_URL ? new HttpsProxyAgent(PROXY_URL) : null;
 
 const cache = new Map();
 const CACHE_TTL = 5 * 60 * 1000;
@@ -138,15 +142,16 @@ function convertShip24ToClient(trackingNumber, parcel) {
 async function fetchFromShip24(trackingNumber) {
   const token = generateToken(trackingNumber);
 
-  const resp = await fetch(`https://api.ship24.com/api/parcels/${trackingNumber}?lang=en`, {
+  const config = {
     method: 'POST',
+    url: `https://api.ship24.com/api/parcels/${trackingNumber}?lang=en`,
     headers: {
       'Content-Type': 'application/json',
       'Origin': 'https://www.ship24.com',
       'Referer': 'https://www.ship24.com/',
       'x-ship24-token': token,
     },
-    body: JSON.stringify({
+    data: {
       userAgent: '',
       os: 'Mac',
       browser: 'Chrome',
@@ -154,17 +159,23 @@ async function fetchFromShip24(trackingNumber) {
       deviceType: 'desktop',
       orientation: 'landscape',
       uL: 'en',
-    }),
-  });
+    },
+    timeout: 15000,
+    validateStatus: () => true,
+  };
+
+  if (proxyAgent) {
+    config.httpsAgent = proxyAgent;
+  }
+
+  const resp = await axios(config);
 
   if (resp.status === 404) return null;
   if (resp.status === 403) throw new Error('Ship24 token rejected (403)');
-  if (!resp.ok) throw new Error(`Ship24 returned ${resp.status}`);
+  if (resp.status < 200 || resp.status >= 300) throw new Error(`Ship24 returned ${resp.status}`);
+  if (!resp.data?.data) return null;
 
-  const data = await resp.json();
-  if (!data.data) return null;
-
-  return convertShip24ToClient(trackingNumber, data.data);
+  return convertShip24ToClient(trackingNumber, resp.data.data);
 }
 
 async function trackChinaPost(trackingNumber) {
