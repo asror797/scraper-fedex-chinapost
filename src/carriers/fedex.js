@@ -1,20 +1,22 @@
 const axios = require('axios');
-
-let hyperSdk = null;
-
-async function getHyperSdk() {
-  if (hyperSdk) return hyperSdk;
-  hyperSdk = await import('hyper-sdk-js');
-  return hyperSdk;
-}
+const { createCache } = require('../utils/cache');
+const { buildNotFoundResponse } = require('../utils/response');
+const { convertFedexPackage } = require('../utils/fedex');
 
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 const SEC_CH_UA = '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"';
 const SEC_CH_UA_PLATFORM = '"Windows"';
 const ACCEPT_LANGUAGE = 'en-US,en;q=0.9';
 
+let hyperSdk = null;
 let impit = null;
 let hyperSession = null;
+
+async function getHyperSdk() {
+  if (hyperSdk) return hyperSdk;
+  hyperSdk = await import('hyper-sdk-js');
+  return hyperSdk;
+}
 
 async function getImpit() {
   if (impit) return impit;
@@ -33,32 +35,28 @@ async function getHyperSession() {
   return hyperSession;
 }
 
-const cache = new Map();
-const CACHE_TTL = 5 * 60 * 1000;
+const cache = createCache();
 
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, entry] of cache) {
-    if (now - entry.ts >= CACHE_TTL) cache.delete(key);
-  }
-}, 10 * 60 * 1000);
-
-function getCached(trackingNumber) {
-  const entry = cache.get(trackingNumber);
-  if (entry && Date.now() - entry.ts < CACHE_TTL) return entry.data;
-  cache.delete(trackingNumber);
-  return null;
-}
-
-let cookies = {};
-let sensorContext = '';
-let cachedToken = null;
-let cachedTokenExpiry = 0;
-let cachedScriptUrl = null;
-let cachedScriptBody = null;
-let cachedScriptExpiry = 0;
-let cachedIp = null;
-let cachedIpExpiry = 0;
+const state = {
+  cookies: {},
+  sensorContext: '',
+  token: null,
+  tokenExpiry: 0,
+  scriptUrl: null,
+  scriptBody: null,
+  scriptExpiry: 0,
+  ip: null,
+  ipExpiry: 0,
+  reset() {
+    this.cookies = {};
+    this.sensorContext = '';
+    this.token = null;
+    this.tokenExpiry = 0;
+    this.scriptUrl = null;
+    this.scriptBody = null;
+    this.scriptExpiry = 0;
+  },
+};
 
 function parseCookiesFromHeaders(headers) {
   let raw;
@@ -74,25 +72,28 @@ function parseCookiesFromHeaders(headers) {
     const [nameVal] = h.split(';');
     const eqIdx = nameVal.indexOf('=');
     if (eqIdx > 0) {
-      cookies[nameVal.substring(0, eqIdx).trim()] = nameVal.substring(eqIdx + 1).trim();
+      state.cookies[nameVal.substring(0, eqIdx).trim()] = nameVal.substring(eqIdx + 1).trim();
     }
   }
 }
 
 function getCookieString() {
-  return Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join('; ');
+  return Object.entries(state.cookies).map(([k, v]) => `${k}=${v}`).join('; ');
 }
 
 async function getIp() {
-  if (cachedIp && Date.now() < cachedIpExpiry) return cachedIp;
-  try { cachedIp = (await axios.get('https://api.ipify.org', { timeout: 3000 })).data.trim(); }
-  catch { cachedIp = (await axios.get('https://checkip.amazonaws.com', { timeout: 3000 })).data.trim(); }
-  cachedIpExpiry = Date.now() + 600_000;
-  return cachedIp;
+  if (state.ip && Date.now() < state.ipExpiry) return state.ip;
+  try {
+    state.ip = (await axios.get('https://api.ipify.org', { timeout: 3000 })).data.trim();
+  } catch {
+    state.ip = (await axios.get('https://checkip.amazonaws.com', { timeout: 3000 })).data.trim();
+  }
+  state.ipExpiry = Date.now() + 600_000;
+  return state.ip;
 }
 
 async function getOAuthToken(client) {
-  if (cachedToken && Date.now() < cachedTokenExpiry) return cachedToken;
+  if (state.token && Date.now() < state.tokenExpiry) return state.token;
   const res = await client.fetch('https://api.fedex.com/auth/oauth/v2/token', {
     method: 'POST',
     headers: {
@@ -105,11 +106,10 @@ async function getOAuthToken(client) {
     body: 'client_id=l7b8ada987a4544ff7a839c8e1f6548eea&grant_type=client_credentials&scope=oob',
   });
   parseCookiesFromHeaders(res.headers);
-  const body = await res.text();
-  const json = JSON.parse(body);
-  cachedToken = json.access_token;
-  cachedTokenExpiry = Date.now() + 50 * 60_000;
-  return cachedToken;
+  const json = JSON.parse(await res.text());
+  state.token = json.access_token;
+  state.tokenExpiry = Date.now() + 50 * 60_000;
+  return state.token;
 }
 
 async function solveFedExAkamai(client, trackNum) {
@@ -122,9 +122,9 @@ async function solveFedExAkamai(client, trackNum) {
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
         'Accept-Language': ACCEPT_LANGUAGE,
         'Cookie': getCookieString(),
-        'sec-ch-ua': '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+        'sec-ch-ua': SEC_CH_UA,
         'sec-ch-ua-mobile': '?0',
-        'sec-ch-ua-platform': '"Windows"',
+        'sec-ch-ua-platform': SEC_CH_UA_PLATFORM,
         'Sec-Fetch-Dest': 'document',
         'Sec-Fetch-Mode': 'navigate',
         'Sec-Fetch-Site': 'none',
@@ -143,14 +143,14 @@ async function solveFedExAkamai(client, trackNum) {
 
   const { parseAkamaiPath, SensorInput, generateSensorData, isAkamaiCookieValid: checkCookie } = await getHyperSdk();
 
-  let scriptUrl = cachedScriptUrl;
-  let scriptBody = cachedScriptBody;
+  let scriptUrl = state.scriptUrl;
+  let scriptBody = state.scriptBody;
 
-  if (!scriptUrl || Date.now() > cachedScriptExpiry) {
+  if (!scriptUrl || Date.now() > state.scriptExpiry) {
     const scriptPath = parseAkamaiPath(pageBody);
     if (!scriptPath) throw new Error('No Akamai script found in page');
     scriptUrl = `https://www.fedex.com${scriptPath}`;
-    cachedScriptUrl = scriptUrl;
+    state.scriptUrl = scriptUrl;
 
     const scriptRes = await client.fetch(scriptUrl, {
       headers: {
@@ -165,21 +165,21 @@ async function solveFedExAkamai(client, trackNum) {
     });
     parseCookiesFromHeaders(scriptRes.headers);
     scriptBody = await scriptRes.text();
-    cachedScriptBody = scriptBody;
-    cachedScriptExpiry = Date.now() + 3600_000;
+    state.scriptBody = scriptBody;
+    state.scriptExpiry = Date.now() + 3600_000;
   }
 
   const session = await getHyperSession();
-  sensorContext = '';
+  state.sensorContext = '';
 
   for (let i = 1; i <= 3; i++) {
     const input = new SensorInput(
-      cookies._abck || '', cookies.bm_sz || '', '3', pageUrl,
-      USER_AGENT, myIp, ACCEPT_LANGUAGE, sensorContext,
+      state.cookies._abck || '', state.cookies.bm_sz || '', '3', pageUrl,
+      USER_AGENT, myIp, ACCEPT_LANGUAGE, state.sensorContext,
       i === 1 ? scriptBody : '', scriptUrl,
     );
     const result = await generateSensorData(session, input);
-    sensorContext = result.context;
+    state.sensorContext = result.context;
 
     const postRes = await client.fetch(scriptUrl, {
       method: 'POST',
@@ -197,69 +197,11 @@ async function solveFedExAkamai(client, trackNum) {
     });
     parseCookiesFromHeaders(postRes.headers);
 
-    if (cookies._abck && checkCookie(cookies._abck, i)) {
+    if (state.cookies._abck && checkCookie(state.cookies._abck, i)) {
       return true;
     }
   }
   return false;
-}
-
-function mapFedexApiStatus(keyStatus) {
-  if (!keyStatus) return 'notfound';
-  const s = keyStatus.toLowerCase();
-  if (s.includes('delivered')) return 'delivered';
-  if (s.includes('transit') || s.includes('on its way') || s.includes('in transit')) return 'transit';
-  if (s.includes('label') || s.includes('created') || s.includes('shipment information sent')) return 'pretransit';
-  if (s.includes('exception') || s.includes('delay') || s.includes('clearance')) return 'exception';
-  if (s.includes('pickup') || s.includes('picked up')) return 'pickup';
-  if (s.includes('hold') || s.includes('undelivered')) return 'undelivered';
-  if (s.includes('updated')) return 'transit';
-  return 'transit';
-}
-
-function convertFedexApiToClient(trackingNumber, pkg) {
-  if (!pkg.keyStatus && (!pkg.scanEventList || pkg.scanEventList.length === 0)) {
-    return buildNotFoundResponse(trackingNumber);
-  }
-
-  const hasRealEvents = (pkg.scanEventList || []).some(e => e.date && (e.description || e.eventDescription || e.scanType));
-  if (!pkg.keyStatus && !hasRealEvents) {
-    return buildNotFoundResponse(trackingNumber);
-  }
-
-  const shipper = pkg.shipperAddress || {};
-  const recipient = pkg.recipientAddress || {};
-
-  const originCityState = [shipper.city, shipper.stateCD].filter(Boolean).join(', ') || null;
-  const destCityState = [recipient.city, recipient.stateCD].filter(Boolean).join(', ') || null;
-
-  const events = (pkg.scanEventList || []).map(e => ({
-    date: e.date || null,
-    information: e.description || e.eventDescription || e.scanType || '',
-    actual_position_parcel: e.scanLocation || null,
-  }));
-
-  return {
-    trackid: trackingNumber,
-    status: mapFedexApiStatus(pkg.keyStatus),
-    original_country: shipper.countryCD || shipper.countryName || null,
-    original_city_state: originCityState,
-    destination_country: recipient.countryCD || recipient.countryName || null,
-    destination_city_state: destCityState,
-    _data_storage: events,
-  };
-}
-
-function buildNotFoundResponse(trackingNumber) {
-  return {
-    trackid: trackingNumber,
-    status: 'notfound',
-    original_country: null,
-    original_city_state: null,
-    destination_country: null,
-    destination_city_state: null,
-    _data_storage: [],
-  };
 }
 
 async function trackViaHyper(trackingNumber) {
@@ -267,7 +209,7 @@ async function trackViaHyper(trackingNumber) {
   const start = Date.now();
 
   const { isAkamaiCookieValid } = await getHyperSdk();
-  const needSensor = !cookies._abck || !isAkamaiCookieValid(cookies._abck, 3);
+  const needSensor = !state.cookies._abck || !isAkamaiCookieValid(state.cookies._abck, 3);
 
   if (needSensor) {
     console.log(`[FedEx/Hyper] Solving Akamai for ${trackingNumber}...`);
@@ -300,9 +242,13 @@ async function trackViaHyper(trackingNumber) {
       'Sec-Fetch-Site': 'same-site',
     },
     body: JSON.stringify({
-      appDeviceType: 'WTRK', appType: 'WTRK', supportHTML: true, supportCurrentLocation: true,
+      appDeviceType: 'WTRK',
+      appType: 'WTRK',
+      supportHTML: true,
+      supportCurrentLocation: true,
       trackingInfo: [{ trackNumberInfo: { trackingCarrier: '', trackingNumber, trackingQualifier: '' } }],
-      uniqueKey: '', guestAuthenticationToken: '',
+      uniqueKey: '',
+      guestAuthenticationToken: '',
     }),
   });
 
@@ -310,13 +256,7 @@ async function trackViaHyper(trackingNumber) {
 
   if (trackRes.status === 403 && !needSensor) {
     console.log(`[FedEx/Hyper] Cookie expired, re-solving...`);
-    cookies = {};
-    sensorContext = '';
-    cachedToken = null;
-    cachedTokenExpiry = 0;
-    cachedScriptUrl = null;
-    cachedScriptBody = null;
-    cachedScriptExpiry = 0;
+    state.reset();
     return trackViaHyper(trackingNumber);
   }
 
@@ -333,18 +273,18 @@ async function trackViaHyper(trackingNumber) {
     return null;
   }
 
-  return convertFedexApiToClient(trackingNumber, pkg);
+  return convertFedexPackage(trackingNumber, pkg);
 }
 
 async function trackFedEx(trackingNumber) {
-  const cached = getCached(trackingNumber);
+  const cached = cache.get(trackingNumber);
   if (cached) return cached;
 
   try {
     const result = await trackViaHyper(trackingNumber);
     if (result && result.status !== 'notfound') {
       console.log(`[FedEx] Success: ${result.status} (${result._data_storage.length} events)`);
-      cache.set(trackingNumber, { data: result, ts: Date.now() });
+      cache.set(trackingNumber, result);
       return result;
     }
   } catch (err) {

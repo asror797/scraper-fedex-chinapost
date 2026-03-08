@@ -1,42 +1,17 @@
 const crypto = require('crypto');
 const axios = require('axios');
 const { HttpsProxyAgent } = require('https-proxy-agent');
+const { createCache } = require('../utils/cache');
+const { buildNotFoundResponse, formatDate } = require('../utils/response');
 
 const HMAC_SECRET = 'qxV6SOr2tqw9m36j0-R-ohPt1PAB2et0';
 const SALT = '\u1780';
+const TOKEN_HASH = crypto.createHash('sha256').update('ship24-tracker').digest('hex');
 const PROXY_URL = process.env.BRIGHTDATA_PROXY || null;
 const proxyAgent = PROXY_URL ? new HttpsProxyAgent(PROXY_URL) : null;
 
-const cache = new Map();
-const CACHE_TTL = 5 * 60 * 1000;
+const cache = createCache();
 
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, entry] of cache) {
-    if (now - entry.ts >= CACHE_TTL) cache.delete(key);
-  }
-}, 10 * 60 * 1000);
-
-function getCached(trackingNumber) {
-  const entry = cache.get(trackingNumber);
-  if (entry && Date.now() - entry.ts < CACHE_TTL) return entry.data;
-  cache.delete(trackingNumber);
-  return null;
-}
-
-function buildNotFoundResponse(trackingNumber) {
-  return {
-    trackid: trackingNumber,
-    status: 'notfound',
-    original_country: null,
-    original_city_state: null,
-    destination_country: null,
-    destination_city_state: null,
-    _data_storage: [],
-  };
-}
-
-// MurmurHash3 x86 32-bit
 function murmurhash3(bytes, seed = 0) {
   let h1 = seed >>> 0;
   const len = bytes.length;
@@ -77,13 +52,12 @@ function murmurhash3(bytes, seed = 0) {
 }
 
 function generateToken(trackingNumber) {
-  const c = crypto.createHash('sha256').update('ship24-tracker').digest('hex');
   const b = Date.now();
   const input = trackingNumber + b + '64' + SALT;
   const bytes = Buffer.from(input, 'utf-8');
   const a = murmurhash3(bytes);
 
-  const payload = Buffer.from(JSON.stringify({ a, b, c })).toString('base64');
+  const payload = Buffer.from(JSON.stringify({ a, b, c: TOKEN_HASH })).toString('base64');
   const signature = crypto.createHmac('sha256', HMAC_SECRET).update(payload).digest('hex');
 
   return `${payload}.${signature}`;
@@ -105,35 +79,19 @@ function mapShip24Status(dispatchCode) {
   return 'transit';
 }
 
-function formatDate(dateStr) {
-  if (!dateStr) return null;
-  const d = new Date(dateStr);
-  if (isNaN(d.getTime())) return null;
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-}
-
-function parseLocation(event) {
-  const parts = [event.location, event.courier?.slug].filter(Boolean);
-  return parts[0] || null;
-}
-
 function convertShip24ToClient(trackingNumber, parcel) {
   const events = (parcel.events || []).map(e => ({
     date: formatDate(e.datetime),
     information: e.status || '',
-    actual_position_parcel: parseLocation(e),
+    actual_position_parcel: e.location || null,
   }));
-
-  const originCountry = parcel.origin_country_code || null;
-  const destCountry = parcel.destination_country_code || null;
 
   return {
     trackid: trackingNumber,
     status: mapShip24Status(parcel.dispatch_code),
-    original_country: originCountry,
+    original_country: parcel.origin_country_code || null,
     original_city_state: null,
-    destination_country: destCountry,
+    destination_country: parcel.destination_country_code || null,
     destination_city_state: null,
     _data_storage: events,
   };
@@ -179,13 +137,13 @@ async function fetchFromShip24(trackingNumber) {
 }
 
 async function trackChinaPost(trackingNumber) {
-  const cached = getCached(trackingNumber);
+  const cached = cache.get(trackingNumber);
   if (cached) return cached;
 
   try {
     const result = await fetchFromShip24(trackingNumber);
     if (result && (result._data_storage.length > 0 || result.status !== 'notfound')) {
-      cache.set(trackingNumber, { data: result, ts: Date.now() });
+      cache.set(trackingNumber, result);
       return result;
     }
   } catch (e) {
